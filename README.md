@@ -1,3 +1,6 @@
 # Lab for CSAPP-3e
 
-Finished Bomb Lab and Attack Lab in SE2307@SJTU.
+[Lab website](http://csapp.cs.cmu.edu/3e/labs.html)
+
+Note: I finished BombLab and AttackLab when I was taking ICS course at SJTU, so the lab files are slightly different from the original files at the above website.
+

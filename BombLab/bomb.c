@@ -1,6 +1,6 @@
 /***************************************************************************
- * Dr. Evil's Insidious Bomb, Version 1.1
- * Copyright 2011, Dr. Evil Incorporated. All rights reserved.
+ * Dr. Evil's Insidious Bomb, Version 1.0
+ * Copyright 2002, Dr. Evil Incorporated. All rights reserved.
  *
  * LICENSE:
  *
@@ -21,7 +21,6 @@
  ***************************************************************************/
 
 #include <stdio.h>
-#include <stdlib.h>
 #include "support.h"
 #include "phases.h"
 
