@@ -4,6 +4,8 @@
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
 #define MAX_OBJECT_SIZE 102400
+#define OBJECT_NUM 10
+#define LRU_MAGIC_NUMBER 9999
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
@@ -24,6 +26,36 @@ void build_http_header(char *http_header, char *hostname, char *path, rio_t *cli
 int connect_endServer(char *hostname, int port, char *http_header);
 void *thread(void *vargp);
 
+void cache_init();
+int cache_find(char *url);
+int cache_eviction();
+void cache_LRU(int index);
+void cache_uri(char *uri, char *buf);
+void readerPre(int i);
+void readerAfter(int i);
+void writerPre(int i);
+void writerAfter(int i);
+
+typedef struct
+{
+    char cache_obj[MAX_OBJECT_SIZE];
+    char cache_url[MAXLINE];
+    int LRU;
+    int isEmpty;
+
+    int readCnt;      /*count of readers*/
+    sem_t wmutex;     /*protects accesses to cache*/
+    sem_t rdcntmutex; /*protects accesses to readcnt*/
+
+} cache_block;
+
+typedef struct
+{
+    cache_block cacheobjs[OBJECT_NUM]; /*ten cache blocks*/
+} Cache;
+
+cache_block cache[OBJECT_NUM];
+
 int main(int argc, char **argv)
 {
     int listenfd, connfd;
@@ -32,6 +64,8 @@ int main(int argc, char **argv)
     pthread_t tid;
 
     struct sockaddr_storage clientaddr; /*generic sockaddr struct which is 28 Bytes.The same use as sockaddr*/
+
+    cache_init();
 
     if (argc != 2)
     {
@@ -78,11 +112,24 @@ void doit(int connfd)
     Rio_readlineb(&rio, buf, MAXLINE);
     sscanf(buf, "%s %s %s", method, uri, version); /*read the client request line*/
 
+    char url_store[100];
+    strcpy(url_store, uri); /*store the original url */
+
     if (strcasecmp(method, "GET"))
     {
         printf("Proxy does not implement the method");
         return;
     }
+
+    int cache_index;
+    if ((cache_index = cache_find(url_store)) != -1)
+    { /*in cache then return the cache content*/
+        readerPre(cache_index);
+        Rio_writen(connfd, cache[cache_index].cache_obj, strlen(cache[cache_index].cache_obj));
+        readerAfter(cache_index);
+        return;
+    }
+
     /*parse the uri to get hostname,file path ,port*/
     parse_uri(uri, hostname, path, &port);
 
@@ -101,14 +148,26 @@ void doit(int connfd)
     /*write the http header to endserver*/
     Rio_writen(end_serverfd, endserver_http_header, strlen(endserver_http_header));
 
+    char cachebuf[MAX_OBJECT_SIZE];
+    int sizebuf = 0;
+
     /*receive message from end server and send to the client*/
     size_t n;
     while ((n = Rio_readlineb(&server_rio, buf, MAXLINE)) != 0)
     {
-        printf("proxy received %ld bytes,then send\n", n);
+        sizebuf += n;
+        if (sizebuf < MAX_OBJECT_SIZE)
+        {
+            strcat(cachebuf, buf);
+        }
         Rio_writen(connfd, buf, n);
     }
     Close(end_serverfd);
+
+    if (sizebuf < MAX_OBJECT_SIZE)
+    {
+        cache_uri(url_store, cachebuf);
+    }
 }
 
 void parse_uri(char *uri, char *hostname, char *path, int *port)
@@ -186,4 +245,134 @@ int connect_endServer(char *hostname, int port, char *http_header)
     char portStr[10];
     sprintf(portStr, "%d", port);
     return Open_clientfd(hostname, portStr);
+}
+
+void cache_init()
+{
+    int i;
+    for (i = 0; i < OBJECT_NUM; i++)
+    {
+        cache[i].LRU = 0;
+        cache[i].isEmpty = 1;
+        Sem_init(&cache[i].wmutex, 0, 1);
+        Sem_init(&cache[i].rdcntmutex, 0, 1);
+        cache[i].readCnt = 0;
+    }
+}
+
+void readerPre(int i)
+{
+    P(&cache[i].rdcntmutex);
+    cache[i].readCnt++;
+    if (cache[i].readCnt == 1)
+    {
+        P(&cache[i].wmutex);
+    }
+    V(&cache[i].rdcntmutex);
+}
+
+void readerAfter(int i)
+{
+    P(&cache[i].rdcntmutex);
+    cache[i].readCnt--;
+    if (cache[i].readCnt == 0)
+    {
+        V(&cache[i].wmutex);
+    }
+    V(&cache[i].rdcntmutex);
+}
+
+void writerPre(int i)
+{
+    P(&cache[i].wmutex);
+}
+
+void writerAfter(int i)
+{
+    V(&cache[i].wmutex);
+}
+
+int cache_find(char *url)
+{
+    int i;
+    for (i = 0; i < OBJECT_NUM; i++)
+    {
+        readerPre(i);
+        if ((cache[i].isEmpty == 0) && (strcmp(url, cache[i].cache_url) == 0))
+        {
+            break;
+        }
+        readerAfter(i);
+    }
+    if (i == OBJECT_NUM)
+    {
+        return -1;
+    }
+    return i;
+}
+
+int cache_eviction()
+{
+    int min = LRU_MAGIC_NUMBER;
+    int minindex = 0;
+    int i;
+    for (i = 0; i < OBJECT_NUM; i++)
+    {
+        readerPre(i);
+        if (cache[i].isEmpty == 1)
+        { /*choose if cache block empty */
+            minindex = i;
+            readerAfter(i);
+            break;
+        }
+        if (cache[i].LRU < min)
+        { /*if not empty choose the min LRU*/
+            minindex = i;
+            readerAfter(i);
+            continue;
+        }
+        readerAfter(i);
+    }
+
+    return minindex;
+}
+
+void cache_LRU(int index)
+{
+    int i;
+    for (i = 0; i < index; i++)
+    {
+        writerPre(i);
+        if (cache[i].isEmpty == 0 && i != index)
+        {
+            cache[i].LRU--;
+        }
+        writerAfter(i);
+    }
+    i++;
+    for (; i < OBJECT_NUM; i++)
+    {
+        writerPre(i);
+        if (cache[i].isEmpty == 0 && i != index)
+        {
+            cache[i].LRU--;
+        }
+        writerAfter(i);
+    }
+}
+
+void cache_uri(char *uri, char *buf)
+{
+
+    int i = cache_eviction();
+
+    writerPre(i); /*writer P*/
+
+    strcpy(cache[i].cache_obj, buf);
+    strcpy(cache[i].cache_url, uri);
+    cache[i].isEmpty = 0;
+    cache[i].LRU = LRU_MAGIC_NUMBER;
+    cache_LRU(i);
+
+    writerAfter(i); /*writer V*/
 }
