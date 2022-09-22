@@ -4,3 +4,11 @@
 
 Note: I finished BombLab and AttackLab when I was taking ICS course at SJTU, so the lab files are slightly different from the original files at the above website.
 
+- [x] DataLab
+- [x] BombLab
+- [x] AttackLab
+- [ ] ArchitectureLab
+- [x] CacheLab
+- [x] MallocLab
+- [x] ShellLab
+- [x] ProxyLab
