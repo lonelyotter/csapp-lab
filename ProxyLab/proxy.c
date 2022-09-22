@@ -22,12 +22,14 @@ void doit(int connfd);
 void parse_uri(char *uri, char *hostname, char *path, int *port);
 void build_http_header(char *http_header, char *hostname, char *path, rio_t *client_rio);
 int connect_endServer(char *hostname, int port, char *http_header);
+void *thread(void *vargp);
 
 int main(int argc, char **argv)
 {
     int listenfd, connfd;
     socklen_t clientlen;
     char hostname[MAXLINE], port[MAXLINE];
+    pthread_t tid;
 
     struct sockaddr_storage clientaddr; /*generic sockaddr struct which is 28 Bytes.The same use as sockaddr*/
 
@@ -46,13 +48,18 @@ int main(int argc, char **argv)
         /*print accepted message*/
         Getnameinfo((SA *)&clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0);
         printf("Accepted connection from (%s %s).\n", hostname, port);
-
-        /*sequential handle the client transaction*/
-        doit(connfd);
-
-        Close(connfd);
+        Pthread_create(&tid, NULL, thread, (void *)connfd);
     }
     return 0;
+}
+
+void *thread(void *vargp)
+{
+    int connfd = (int)vargp;
+    Pthread_detach(pthread_self());
+    doit(connfd);
+    Close(connfd);
+    return NULL;
 }
 
 void doit(int connfd)
